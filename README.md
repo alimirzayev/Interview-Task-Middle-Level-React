@@ -2,7 +2,7 @@
 
 Create an application for drawing polygons on a Mapbox map engine using React. 
 Application features:
-  - Draw one or more polygon(s) of any shape on the map using mouse. 
+  - Draw one or more polygon(s) on the map using mouse. 
  
   - Automatically save the polygon to Firebase storage. 
  
