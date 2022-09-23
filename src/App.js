@@ -1,4 +1,4 @@
-import { Fragment, useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import './App.css'
 import 'mapbox-gl/dist/mapbox-gl.css';
 import mapboxgl from 'mapbox-gl';
@@ -6,12 +6,15 @@ import MapboxGeocoder from '@mapbox/mapbox-gl-geocoder';
 import MapboxDraw from "@mapbox/mapbox-gl-draw";
 import '@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css';
 import * as turf from '@turf/turf'
-import db from './firebase';
-import { app } from './firebase';
+import { db } from './firebase';
+import { uid } from 'uid';
+import { set, ref, onValue, remove, update } from "firebase/database"
 
 function App() {
   const mapRef = useRef(null);
-  const [fireData, setFireData] = useState();
+  const [deleteGetFromDb, setDeleteGetFromDb] = useState([]);
+  const [id, setId] = useState([]);
+
 
   const draw = new MapboxDraw({
     displayControlsDefault: false,
@@ -23,35 +26,34 @@ function App() {
   });
 
   useEffect(() => {
-    fetch('https://mapbox-7fd95-default-rtdb.firebaseio.com/area.json')
-      .then((res) => res.json())
-      .then((data) => {
+    onValue(ref(db), (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
         const firebaseDataKeys = Object.keys(data);
         firebaseDataKeys.forEach((key) => {
-          console.log(data[key][0].geometry.coordinates[0]);
-          console.log(data[key][0].geometry.coordinates);
-          console.log([[-40, 37.5], [40, 37.5], [40, 30], [-40, -30], [-40, -37.5], [40, -37.5]]);
           draw.add({
             type: 'Feature',
             properties: {},
             geometry: {
               type: 'LineString',
-              coordinates: data[key][0].geometry.coordinates[0],
+              coordinates: data[key].postDrawData.geometry.coordinates[0]
             }
           });
         });
-      })
-  }, [fireData])
+      }
+    })
+  }, [])
 
-  function initMapboxGLJS() {
+  async function initMapboxGLJS() {
     mapboxgl.accessToken = 'pk.eyJ1IjoiYWxpbWlyemF5ZWYiLCJhIjoiY2w4Y25vYTk5MG5kczNvcGN3NnhwZnJyNSJ9.usDar3ctZeObYcy5jes_4w';
 
     const map = new mapboxgl.Map({
       container: 'map',
       projection: 'globe',
-      style: 'mapbox://styles/mapbox/satellite-v9',
+      style: 'mapbox://styles/mapbox/satellite-streets-v11',
+      // style: 'mapbox://styles/mapbox/satellite-streets-v11'
       center: [49.860, 40.370],
-      zoom: 12.5
+      zoom: 10,
     });
 
     map.addControl(
@@ -65,49 +67,135 @@ function App() {
       .setLngLat([49.870, 40.38770])
       .addTo(map);
 
+    await map.once('load');
+
+    map.setFog({
+      'range': [-1, 2],
+      'horizon-blend': 0.3,
+      'color': 'white',
+      'high-color': '#add8e6',
+      'space-color': '#d8f2ff',
+      'star-intensity': 0.0
+    });
+
     map.addControl(draw);
+
 
     map.on('draw.create', updateArea);
     map.on('draw.delete', updateArea);
     map.on('draw.update', updateArea);
 
-    function updateArea(e) {
-      const data = draw.getAll();
-      const answer = document.getElementById('calculated-area');
-      if (data.features.length > 0) {
-        const area = turf.area(data);
-        const rounded_area = Math.round(area * 100) / 100;
-        answer.innerHTML = `<p><strong>${rounded_area}</strong></p><p>square meters</p>`;
-      } else {
-        answer.innerHTML = '';
-        if (e.type !== 'draw.delete')
-          alert('Click the map to draw a polygon.');
+    document.getElementById('buttons').addEventListener('click', (event) => {
+      const language = event.target.id.substr('button-'.length);
+      map.setLayoutProperty('country-label', 'text-field', [
+        'get',
+        `name_${language}`
+      ]);
+    });
+
+    async function updateArea(e) {
+      console.log(e.features[0].id);
+      const drawData = draw.getAll();
+      const calculatedArea = document.getElementById('calculated-area');
+      if (e.type == "draw.create") {
+        const uuid = uid();
+
+        const formattedId = {
+          id: uuid,
+          data: {}
+        };
+        setId((id) => [...id, formattedId]);
+        const postDrawData = e.features[0];
+        set(ref(db, `/${uuid}`), {
+          postDrawData,
+          uuid
+        })
       }
 
-      if (e.type === "draw.create") {
-        const requestOptions = {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(draw.getAll().features)
-        };
-        fetch('https://mapbox-7fd95-default-rtdb.firebaseio.com/area.json', requestOptions)
-          .then((res) => console.log(res))
+      if (e.type == "draw.delete") {
+        if (e.type == "draw.delete") {
+          onValue(ref(db), (snapshot) => {
+            const data = snapshot.val();
+            console.log(data);
+            if (data) {
+              Object.values(data).map(async dataDraw => {
+                if (dataDraw.postDrawData.geometry.coordinates[0][0][0] == e.features[0].geometry.coordinates[0][0]) {
+                  console.log('beraberdi ve silmey ucun func runnandi')
+                  const res = remove(ref(db, `/${dataDraw.uuid}`));
+                  console.log(res)
+                }
+                // setDeleteGetFromDb(previousData => [...previousData, dataDraw]);
+              })
+            }
+          })
+        }
+      }
+
+      if (e.type == "draw.update") {
+        const postDrawData = e.features[0];
+        onValue(ref(db), (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            Object.values(data).map(dataDraw => {
+              if (dataDraw.postDrawData.id == e.features[0].id) {
+                const updateUuid = dataDraw.uuid;
+                update(ref(db, `/${updateUuid}`), {
+                  postDrawData,
+                  uuid: updateUuid
+                });
+              }
+            })
+          }
+        })
+      }
+      if (drawData.features.length > 0) {
+        const area = turf.area(drawData);
+        const rounded_area = Math.round(area * 100) / 100;
+        calculatedArea.innerHTML = `<p><strong>${rounded_area}</strong></p><p>square meters</p>`;
+      } else {
+        calculatedArea.innerHTML = '';
+        if (e.type !== 'draw.delete')
+          alert('Click the map to draw a polygon.');
       }
     }
   }
 
   useEffect(() => {
     initMapboxGLJS()
-  }, [mapRef])
+  }, [mapRef, db])
+
+  useEffect(() => {
+    onValue(ref(db), (snapshot) => {
+      const data = snapshot.val();
+      console.log(data);
+      if (data) {
+        const firebaseDataKeys = Object.keys(data);
+        firebaseDataKeys.forEach((key) => {
+          draw.add({
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: data[key].postDrawData.geometry.coordinates[0]
+            }
+          });
+        });
+      }
+    })
+  }, [])
+
+  console.log(id);
 
   return (
     <>
-      <div ref={mapRef} id='map'>
-      </div>
-      <div class="calculation-box">
-        <p>Click the map to draw a polygon.</p>
-        <div id="calculated-area"></div>
-      </div>
+      <div ref={mapRef} id='map'></div>
+      <ul id="buttons">
+        <li id="button-en" class="button">English</li>
+        <li id="button-fr" class="button">French</li>
+        <li id="button-ru" class="button">Russian</li>
+        <li id="button-de" class="button">German</li>
+        <li id="button-es" class="button">Spanish</li>
+      </ul>
     </>
   );
 }
